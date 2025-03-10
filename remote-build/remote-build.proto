@@ -2,22 +2,36 @@ syntax = "proto3";
 
 option go_package = "remote-build/remote-build";
 
-
 package remote_build;
 
-// The greeting service definition.
-service micservice {
-  // Sends a greeting
+// Remote build service definition
+service MicService {
   rpc StartBuild (BuildRequest) returns (BuildResponse) {}
   rpc GetBuildStatus (BuildStatusRequest) returns (BuildStatusResponse) {}
 }
 
-// The request message containing the user's name.
-message BuildRequest {
-  string name = 1;
+service WorkerService {
+  rpc ProcessBuild (BuildRequest) returns (BuildResponse) {}
 }
 
-// The response message containing the greetings
-message BuildResponse {
-  string message = 1;
+// Request for starting a build
+message BuildRequest {
+  string name = 1; 
 }
+
+// Response when build starts
+message BuildResponse {
+  string build_id = 1; 
+  string message = 2;  
+}
+
+// Request to check build status
+message BuildStatusRequest {
+  string build_id = 1; 
+}
+
+// Response with the current build status
+message BuildStatusResponse {
+  string status = 1; 
+}
+

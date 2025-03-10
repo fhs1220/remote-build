@@ -1,4 +1,3 @@
-
 package main
 
 import (
@@ -6,42 +5,64 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math/rand"
 	"net"
 
+	pb "remote-build/remote-build"
+
 	"google.golang.org/grpc"
- pb "remote-build/remote-build"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 var (
-	port = flag.Int("port", 50051, "The server port")
+	port       = flag.Int("port", 50051, "The server port")
+	workerAddr = flag.String("worker_addr", "localhost:50052", "The worker address")
 )
 
-// server is used to implement helloworld.GreeterServer.
- type server struct {
- 	pb.UnimplementedGreeterServer
- }
+type Server struct {
+	pb.UnimplementedMicServiceServer
+	workerClient pb.WorkerServiceClient
+}
 
-// SayHello implements helloworld.GreeterServer
- func (s *server) StartBuild(_ context.Context, in *pb.HelloRequest) (*pb.HelloReply, error) {
- 	log.Printf("Received: %v", in.GetName())
- 	return &pb.HelloReply{Message: "Hello " + in.GetName()}, nil
- }
+func (s *Server) StartBuild(ctx context.Context, req *pb.BuildRequest) (*pb.BuildResponse, error) {
+	buildID := fmt.Sprintf("%d", rand.Intn(100000))
 
- func (s *server) GetBuildStatus(ctx context.Context, in *pb.HelloRequest) (*pb.HelloReply, error) {
-         return &pb.HelloReply{Message: "Hello again " + in.GetName()}, nil
- }
+	log.Printf("Received build request: %s (Build ID: %s)", req.Name, buildID)
+
+	resp, err := s.workerClient.ProcessBuild(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to process build: %v", err)
+	}
+
+	return &pb.BuildResponse{
+		BuildId: buildID,
+		Message: resp.Message,
+	}, nil
+}
 
 func main() {
 	flag.Parse()
+
+	workerConn, err := grpc.NewClient(*workerAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		log.Fatalf("Could not connect to worker: %v", err)
+	}
+	defer workerConn.Close()
+
+	workerClient := pb.NewWorkerServiceClient(workerConn)
+
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
 	if err != nil {
-		log.Fatalf("failed to listen: %v", err)
-	}
-	s := grpc.NewServer()
-	pb.RegisterGreeterServer(s, &server{})
-	log.Printf("server listening at %v", lis.Addr())
-	if err := s.Serve(lis); err != nil {
-		log.Fatalf("failed to serve: %v", err)
+		log.Fatalf("Failed to listen: %v", err)
 	}
 
+	grpcServer := grpc.NewServer()
+	server := &Server{workerClient: workerClient}
+
+	pb.RegisterMicServiceServer(grpcServer, server)
+
+	log.Printf("Server is running on port %d...", *port)
+	if err := grpcServer.Serve(lis); err != nil {
+		log.Fatalf("Failed to serve: %v", err)
+	}
 }
