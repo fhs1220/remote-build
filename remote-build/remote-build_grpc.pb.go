@@ -25,8 +25,6 @@ const (
 // MicServiceClient is the client API for MicService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
-//
-// Client requests a build from the server
 type MicServiceClient interface {
 	StartBuild(ctx context.Context, in *BuildRequest, opts ...grpc.CallOption) (*BuildResponse, error)
 }
@@ -52,8 +50,6 @@ func (c *micServiceClient) StartBuild(ctx context.Context, in *BuildRequest, opt
 // MicServiceServer is the server API for MicService service.
 // All implementations must embed UnimplementedMicServiceServer
 // for forward compatibility.
-//
-// Client requests a build from the server
 type MicServiceServer interface {
 	StartBuild(context.Context, *BuildRequest) (*BuildResponse, error)
 	mustEmbedUnimplementedMicServiceServer()
@@ -131,8 +127,6 @@ const (
 // WorkerServiceClient is the client API for WorkerService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
-//
-// Server sends a work request to the worker
 type WorkerServiceClient interface {
 	ProcessWork(ctx context.Context, in *WorkRequest, opts ...grpc.CallOption) (*WorkResponse, error)
 }
@@ -158,8 +152,6 @@ func (c *workerServiceClient) ProcessWork(ctx context.Context, in *WorkRequest, 
 // WorkerServiceServer is the server API for WorkerService service.
 // All implementations must embed UnimplementedWorkerServiceServer
 // for forward compatibility.
-//
-// Server sends a work request to the worker
 type WorkerServiceServer interface {
 	ProcessWork(context.Context, *WorkRequest) (*WorkResponse, error)
 	mustEmbedUnimplementedWorkerServiceServer()

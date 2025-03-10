@@ -3,14 +3,14 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 	"log"
 	"net"
+	"os"
+	"os/exec"
 	"strings"
 
-	pb "remote-build/remote-build"
-
 	"google.golang.org/grpc"
+	pb "remote-build/remote-build"
 )
 
 var port = flag.Int("port", 50052, "The worker port")
@@ -20,22 +20,42 @@ type WorkerServer struct {
 }
 
 func (w *WorkerServer) ProcessWork(ctx context.Context, req *pb.WorkRequest) (*pb.WorkResponse, error) {
-	log.Printf("Worker received files: %s", req.Files)
-	files := strings.Split(req.Files, " ")
-	for i, file := range files {
-		if strings.HasSuffix(file, ".c") {
-			files[i] = strings.Replace(file, ".c", ".o", 1)
-		}
-	}
-	processedFiles := strings.Join(files, " ")
+	log.Printf("Worker received file: %s", req.Filename)
 
-	log.Printf("Worker processed files: %s", processedFiles)
-	return &pb.WorkResponse{ProcessedFiles: processedFiles}, nil
+	// Save the '.c' file locally
+	err := os.WriteFile(req.Filename, req.FileContent, 0644)
+	if err != nil {
+		log.Fatalf("Failed to write file: %v", err)
+	}
+
+	// Convert '.c' to '.o'
+	compiledFilename := strings.Replace(req.Filename, ".c", ".o", 1)
+	log.Printf("Compiling %s to %s", req.Filename, compiledFilename)
+
+	// Compile using gcc: gcc -c main.c -o main.o
+	cmd := exec.Command("gcc", "-c", req.Filename, "-o", compiledFilename)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Fatalf("Compilation failed: %v, Output: %s", err, output)
+	}
+
+	compiledContent, err := os.ReadFile(compiledFilename)
+	if err != nil {
+		log.Fatalf("Failed to read compiled file: %v", err)
+	}
+
+	os.Remove(compiledFilename)
+
+	log.Printf("Compilation successful: %s", compiledFilename)
+	return &pb.WorkResponse{
+		Filename:        compiledFilename,
+		CompiledContent: compiledContent,
+	}, nil
 }
 
 func main() {
 	flag.Parse()
-	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
+	lis, err := net.Listen("tcp", ":50052")
 	if err != nil {
 		log.Fatalf("Failed to listen: %v", err)
 	}

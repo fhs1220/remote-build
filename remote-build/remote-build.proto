@@ -4,32 +4,30 @@ option go_package = "remote-build/remote-build";
 
 package remote_build;
 
-// Client requests a build from the server
 service MicService {
   rpc StartBuild (BuildRequest) returns (BuildResponse) {}
 }
 
-// Server sends a work request to the worker
 service WorkerService {
   rpc ProcessWork (WorkRequest) returns (WorkResponse) {}
 }
 
-// Request to start a build (Client → Server)
 message BuildRequest {
-  string files = 1; 
+  string filename = 1;  
+  bytes file_content = 2;  
 }
 
-// Server sends this request to the Worker
 message WorkRequest {
-  string files = 1; 
+  string filename = 1;
+  bytes file_content = 2;
 }
 
-// Worker responds with modified filenames
 message WorkResponse {
-  string processed_files = 1; 
+  string filename = 1;
+  bytes compiled_content = 2;  
 }
 
-// Server final response to the client
 message BuildResponse {
-  string result_files = 1; 
+  string filename = 1;
+  bytes compiled_content = 2;
 }

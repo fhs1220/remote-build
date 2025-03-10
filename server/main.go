@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 	"log"
 	"net"
 
@@ -23,23 +22,29 @@ type Server struct {
 }
 
 func (s *Server) StartBuild(ctx context.Context, req *pb.BuildRequest) (*pb.BuildResponse, error) {
-	log.Printf("Server received build request: %s", req.Files)
+	log.Printf("Server received file: %s", req.Filename)
 
-	resp, err := s.workerClient.ProcessWork(ctx, &pb.WorkRequest{Files: req.Files})
+	// Forward request to worker
+	resp, err := s.workerClient.ProcessWork(ctx, &pb.WorkRequest{
+		Filename:    req.Filename,
+		FileContent: req.FileContent,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to process work: %v", err)
+		return nil, err
 	}
 
-	log.Printf("Server received processed files from Worker: %s", resp.ProcessedFiles)
+	log.Printf("Server received compiled file: %s", resp.Filename)
 
 	return &pb.BuildResponse{
-		ResultFiles: resp.ProcessedFiles,
+		Filename:        resp.Filename,
+		CompiledContent: resp.CompiledContent,
 	}, nil
 }
 
 func main() {
 	flag.Parse()
 
+	// Connect to the worker
 	workerConn, err := grpc.NewClient(*workerAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		log.Fatalf("Could not connect to worker: %v", err)
@@ -48,7 +53,8 @@ func main() {
 
 	workerClient := pb.NewWorkerServiceClient(workerConn)
 
-	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
+	// Start the server
+	lis, err := net.Listen("tcp", ":50051")
 	if err != nil {
 		log.Fatalf("Failed to listen: %v", err)
 	}
