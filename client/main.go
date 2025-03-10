@@ -6,33 +6,30 @@ import (
 	"log"
 	"time"
 
-	pb "remote-build/remote-build"
-
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	pb "remote-build/remote-build"
 )
 
-var addr = flag.String("addr", "localhost:50051", "The address to connect to")
+var addr = flag.String("addr", "localhost:50051", "The server address")
 
 func main() {
 	flag.Parse()
 
-	// Connect to the server
 	conn, err := grpc.NewClient(*addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		log.Fatalf("Could not connect: %v", err)
+		log.Fatalf("Could not connect to server: %v", err)
 	}
 	defer conn.Close()
 
 	client := pb.NewMicServiceClient(conn)
 
-	// Send build request
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	resp, err := client.StartBuild(ctx, &pb.BuildRequest{Name: "MyProject"})
+	resp, err := client.StartBuild(ctx, &pb.BuildRequest{Files: "main.c lib.c"})
 	if err != nil {
 		log.Fatalf("Error while starting build: %v", err)
 	}
-	log.Printf("Build Completed: %s (ID: %s)", resp.Message, resp.BuildId)
+	log.Printf("Build Completed: %s", resp.ResultFiles)
 }

@@ -19,18 +19,16 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	MicService_StartBuild_FullMethodName     = "/remote_build.MicService/StartBuild"
-	MicService_GetBuildStatus_FullMethodName = "/remote_build.MicService/GetBuildStatus"
+	MicService_StartBuild_FullMethodName = "/remote_build.MicService/StartBuild"
 )
 
 // MicServiceClient is the client API for MicService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// Remote build service definition
+// Client requests a build from the server
 type MicServiceClient interface {
 	StartBuild(ctx context.Context, in *BuildRequest, opts ...grpc.CallOption) (*BuildResponse, error)
-	GetBuildStatus(ctx context.Context, in *BuildStatusRequest, opts ...grpc.CallOption) (*BuildStatusResponse, error)
 }
 
 type micServiceClient struct {
@@ -51,24 +49,13 @@ func (c *micServiceClient) StartBuild(ctx context.Context, in *BuildRequest, opt
 	return out, nil
 }
 
-func (c *micServiceClient) GetBuildStatus(ctx context.Context, in *BuildStatusRequest, opts ...grpc.CallOption) (*BuildStatusResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(BuildStatusResponse)
-	err := c.cc.Invoke(ctx, MicService_GetBuildStatus_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // MicServiceServer is the server API for MicService service.
 // All implementations must embed UnimplementedMicServiceServer
 // for forward compatibility.
 //
-// Remote build service definition
+// Client requests a build from the server
 type MicServiceServer interface {
 	StartBuild(context.Context, *BuildRequest) (*BuildResponse, error)
-	GetBuildStatus(context.Context, *BuildStatusRequest) (*BuildStatusResponse, error)
 	mustEmbedUnimplementedMicServiceServer()
 }
 
@@ -81,9 +68,6 @@ type UnimplementedMicServiceServer struct{}
 
 func (UnimplementedMicServiceServer) StartBuild(context.Context, *BuildRequest) (*BuildResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method StartBuild not implemented")
-}
-func (UnimplementedMicServiceServer) GetBuildStatus(context.Context, *BuildStatusRequest) (*BuildStatusResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetBuildStatus not implemented")
 }
 func (UnimplementedMicServiceServer) mustEmbedUnimplementedMicServiceServer() {}
 func (UnimplementedMicServiceServer) testEmbeddedByValue()                    {}
@@ -124,24 +108,6 @@ func _MicService_StartBuild_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
-func _MicService_GetBuildStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(BuildStatusRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(MicServiceServer).GetBuildStatus(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: MicService_GetBuildStatus_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(MicServiceServer).GetBuildStatus(ctx, req.(*BuildStatusRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 // MicService_ServiceDesc is the grpc.ServiceDesc for MicService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -153,24 +119,22 @@ var MicService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "StartBuild",
 			Handler:    _MicService_StartBuild_Handler,
 		},
-		{
-			MethodName: "GetBuildStatus",
-			Handler:    _MicService_GetBuildStatus_Handler,
-		},
 	},
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "remote-build/remote-build.proto",
 }
 
 const (
-	WorkerService_ProcessBuild_FullMethodName = "/remote_build.WorkerService/ProcessBuild"
+	WorkerService_ProcessWork_FullMethodName = "/remote_build.WorkerService/ProcessWork"
 )
 
 // WorkerServiceClient is the client API for WorkerService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// Server sends a work request to the worker
 type WorkerServiceClient interface {
-	ProcessBuild(ctx context.Context, in *BuildRequest, opts ...grpc.CallOption) (*BuildResponse, error)
+	ProcessWork(ctx context.Context, in *WorkRequest, opts ...grpc.CallOption) (*WorkResponse, error)
 }
 
 type workerServiceClient struct {
@@ -181,10 +145,10 @@ func NewWorkerServiceClient(cc grpc.ClientConnInterface) WorkerServiceClient {
 	return &workerServiceClient{cc}
 }
 
-func (c *workerServiceClient) ProcessBuild(ctx context.Context, in *BuildRequest, opts ...grpc.CallOption) (*BuildResponse, error) {
+func (c *workerServiceClient) ProcessWork(ctx context.Context, in *WorkRequest, opts ...grpc.CallOption) (*WorkResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(BuildResponse)
-	err := c.cc.Invoke(ctx, WorkerService_ProcessBuild_FullMethodName, in, out, cOpts...)
+	out := new(WorkResponse)
+	err := c.cc.Invoke(ctx, WorkerService_ProcessWork_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -194,8 +158,10 @@ func (c *workerServiceClient) ProcessBuild(ctx context.Context, in *BuildRequest
 // WorkerServiceServer is the server API for WorkerService service.
 // All implementations must embed UnimplementedWorkerServiceServer
 // for forward compatibility.
+//
+// Server sends a work request to the worker
 type WorkerServiceServer interface {
-	ProcessBuild(context.Context, *BuildRequest) (*BuildResponse, error)
+	ProcessWork(context.Context, *WorkRequest) (*WorkResponse, error)
 	mustEmbedUnimplementedWorkerServiceServer()
 }
 
@@ -206,8 +172,8 @@ type WorkerServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedWorkerServiceServer struct{}
 
-func (UnimplementedWorkerServiceServer) ProcessBuild(context.Context, *BuildRequest) (*BuildResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ProcessBuild not implemented")
+func (UnimplementedWorkerServiceServer) ProcessWork(context.Context, *WorkRequest) (*WorkResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ProcessWork not implemented")
 }
 func (UnimplementedWorkerServiceServer) mustEmbedUnimplementedWorkerServiceServer() {}
 func (UnimplementedWorkerServiceServer) testEmbeddedByValue()                       {}
@@ -230,20 +196,20 @@ func RegisterWorkerServiceServer(s grpc.ServiceRegistrar, srv WorkerServiceServe
 	s.RegisterService(&WorkerService_ServiceDesc, srv)
 }
 
-func _WorkerService_ProcessBuild_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(BuildRequest)
+func _WorkerService_ProcessWork_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(WorkRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(WorkerServiceServer).ProcessBuild(ctx, in)
+		return srv.(WorkerServiceServer).ProcessWork(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: WorkerService_ProcessBuild_FullMethodName,
+		FullMethod: WorkerService_ProcessWork_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WorkerServiceServer).ProcessBuild(ctx, req.(*BuildRequest))
+		return srv.(WorkerServiceServer).ProcessWork(ctx, req.(*WorkRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -256,8 +222,8 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*WorkerServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "ProcessBuild",
-			Handler:    _WorkerService_ProcessBuild_Handler,
+			MethodName: "ProcessWork",
+			Handler:    _WorkerService_ProcessWork_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

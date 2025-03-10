@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strings"
 
 	pb "remote-build/remote-build"
 
@@ -18,17 +19,18 @@ type WorkerServer struct {
 	pb.UnimplementedWorkerServiceServer
 }
 
-// ProcessBuild handles the build request
-func (w *WorkerServer) ProcessBuild(ctx context.Context, req *pb.BuildRequest) (*pb.BuildResponse, error) {
-	buildID := fmt.Sprintf("%d", req.Name)
+func (w *WorkerServer) ProcessWork(ctx context.Context, req *pb.WorkRequest) (*pb.WorkResponse, error) {
+	log.Printf("Worker received files: %s", req.Files)
+	files := strings.Split(req.Files, " ")
+	for i, file := range files {
+		if strings.HasSuffix(file, ".c") {
+			files[i] = strings.Replace(file, ".c", ".o", 1)
+		}
+	}
+	processedFiles := strings.Join(files, " ")
 
-	log.Printf("Worker started processing build: %s (Build ID: %s)", req.Name, buildID)
-	log.Printf("Worker finished processing build: %s (Build ID: %s)", req.Name, buildID)
-
-	return &pb.BuildResponse{
-		BuildId: buildID,
-		Message: "Build Completed by Worker",
-	}, nil
+	log.Printf("Worker processed files: %s", processedFiles)
+	return &pb.WorkResponse{ProcessedFiles: processedFiles}, nil
 }
 
 func main() {

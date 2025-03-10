@@ -5,13 +5,11 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"math/rand"
 	"net"
-
-	pb "remote-build/remote-build"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	pb "remote-build/remote-build"
 )
 
 var (
@@ -25,18 +23,17 @@ type Server struct {
 }
 
 func (s *Server) StartBuild(ctx context.Context, req *pb.BuildRequest) (*pb.BuildResponse, error) {
-	buildID := fmt.Sprintf("%d", rand.Intn(100000))
+	log.Printf("Server received build request: %s", req.Files)
 
-	log.Printf("Received build request: %s (Build ID: %s)", req.Name, buildID)
-
-	resp, err := s.workerClient.ProcessBuild(ctx, req)
+	resp, err := s.workerClient.ProcessWork(ctx, &pb.WorkRequest{Files: req.Files})
 	if err != nil {
-		return nil, fmt.Errorf("failed to process build: %v", err)
+		return nil, fmt.Errorf("failed to process work: %v", err)
 	}
 
+	log.Printf("Server received processed files from Worker: %s", resp.ProcessedFiles)
+
 	return &pb.BuildResponse{
-		BuildId: buildID,
-		Message: resp.Message,
+		ResultFiles: resp.ProcessedFiles,
 	}, nil
 }
 
