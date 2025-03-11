@@ -17,15 +17,9 @@ var addr = flag.String("addr", "localhost:50051", "The server address")
 func main() {
 	flag.Parse()
 
-	// Read the actual C file
-	filename := "main.c"
-	fileData, err := os.ReadFile(filename)
-	if err != nil {
-		log.Fatalf("Failed to read file: %v", err)
-	}
+	files := []string{"main.c", "main2.c", "main3.c"}
 
-	// Connect to the server
-	conn, err := grpc.NewClient(*addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.Dial(*addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		log.Fatalf("Could not connect to server: %v", err)
 	}
@@ -33,24 +27,29 @@ func main() {
 
 	client := pb.NewMicServiceClient(conn)
 
-	// Send build request
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	for _, filename := range files {
+		fileData, err := os.ReadFile(filename)
+		if err != nil {
+			log.Fatalf("Failed to read file %s: %v", filename, err)
+		}
 
-	resp, err := client.StartBuild(ctx, &pb.BuildRequest{
-		Filename:    filename,
-		FileContent: fileData,
-	})
-	if err != nil {
-		log.Fatalf("Error while starting build: %v", err)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		resp, err := client.StartBuild(ctx, &pb.BuildRequest{
+			Filename:    filename,
+			FileContent: fileData,
+		})
+		if err != nil {
+			log.Fatalf("Error while starting build for %s: %v", filename, err)
+		}
+
+		outputFilename := resp.Filename
+		err = os.WriteFile(outputFilename, resp.CompiledContent, 0644)
+		if err != nil {
+			log.Fatalf("Failed to save compiled file %s: %v", outputFilename, err)
+		}
+
+		log.Printf("Build Completed: %s saved as %s", filename, outputFilename)
 	}
-
-	// Save the compiled `.o` file
-	outputFilename := resp.Filename
-	err = os.WriteFile(outputFilename, resp.CompiledContent, 0644)
-	if err != nil {
-		log.Fatalf("Failed to save compiled file: %v", err)
-	}
-
-	log.Printf("Build Completed: %s saved as %s", filename, outputFilename)
 }

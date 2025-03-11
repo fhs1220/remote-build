@@ -3,9 +3,10 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
+	"os"
 	"log"
 	"net"
-	"os"
 	"os/exec"
 	"strings"
 
@@ -13,26 +14,26 @@ import (
 	pb "remote-build/remote-build"
 )
 
-var port = flag.Int("port", 50052, "The worker port")
+var port = flag.Int("port", 50052, "The worker port") 
 
 type WorkerServer struct {
 	pb.UnimplementedWorkerServiceServer
 }
 
 func (w *WorkerServer) ProcessWork(ctx context.Context, req *pb.WorkRequest) (*pb.WorkResponse, error) {
-	log.Printf("Worker received file: %s", req.Filename)
+	log.Printf("Worker on port %d received file: %s", *port, req.Filename)
 
-	// Save the '.c' file locally
+	// Save the `.c` file
 	err := os.WriteFile(req.Filename, req.FileContent, 0644)
 	if err != nil {
 		log.Fatalf("Failed to write file: %v", err)
 	}
 
-	// Convert '.c' to '.o'
+	// Convert `.c` to `.o`
 	compiledFilename := strings.Replace(req.Filename, ".c", ".o", 1)
 	log.Printf("Compiling %s to %s", req.Filename, compiledFilename)
 
-	// Compile using gcc: gcc -c main.c -o main.o
+	// Compile using `gcc`
 	cmd := exec.Command("gcc", "-c", req.Filename, "-o", compiledFilename)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -43,7 +44,6 @@ func (w *WorkerServer) ProcessWork(ctx context.Context, req *pb.WorkRequest) (*p
 	if err != nil {
 		log.Fatalf("Failed to read compiled file: %v", err)
 	}
-
 	os.Remove(compiledFilename)
 
 	log.Printf("Compilation successful: %s", compiledFilename)
@@ -55,9 +55,10 @@ func (w *WorkerServer) ProcessWork(ctx context.Context, req *pb.WorkRequest) (*p
 
 func main() {
 	flag.Parse()
-	lis, err := net.Listen("tcp", ":50052")
+
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
 	if err != nil {
-		log.Fatalf("Failed to listen: %v", err)
+		log.Fatalf("Failed to listen on port %d: %v", *port, err)
 	}
 
 	grpcServer := grpc.NewServer()
