@@ -17,9 +17,9 @@ var addr = flag.String("addr", "localhost:50051", "The server address")
 func main() {
 	flag.Parse()
 
-	files := []string{"main.c", "main2.c", "main3.c"}
+	files := []string{"main.c", "main2.c", "main3.c", "main4.c", "main5.c"}
 
-	conn, err := grpc.Dial(*addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(*addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		log.Fatalf("Could not connect to server: %v", err)
 	}

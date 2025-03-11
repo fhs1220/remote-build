@@ -15,7 +15,7 @@ import (
 
 var (
 	port       = flag.Int("port", 50051, "The server port")
-	workerAddrs = flag.String("worker_addrs", "localhost:50052,localhost:50053,localhost:50054", "Comma-separated worker addresses")
+	workerAddrs = flag.String("worker_addrs", "localhost:50052,localhost:50053,localhost:50054", "separated worker addresses")
 )
 
 type Server struct {
@@ -39,21 +39,51 @@ func (s *Server) StartBuild(ctx context.Context, req *pb.BuildRequest) (*pb.Buil
 
 	worker := s.getNextWorker()
 
-	resp, err := worker.ProcessWork(ctx, &pb.WorkRequest{
-		Filename:    req.Filename,
-		FileContent: req.FileContent,
-	})
-	if err != nil {
-		log.Printf("Error processing file %s: %v", req.Filename, err)
-		return nil, err
-	}
+	
+	// resp, err := worker.ProcessWork(ctx, &pb.WorkRequest{
+	// 	Filename:    req.Filename,
+	// 	FileContent: req.FileContent,
+	// })
 
-	log.Printf("Server received compiled file: %s", resp.Filename)
+	respChan := make(chan *pb.BuildResponse)
+	errChan := make(chan error)
 
-	return &pb.BuildResponse{
+	go func() {
+		resp, err := worker.ProcessWork(ctx, &pb.WorkRequest{
+			Filename:    req.Filename,
+			FileContent: req.FileContent,
+		})
+	
+
+		if err != nil {
+			errChan <- err
+			return
+		}
+		respChan <- &pb.BuildResponse{
 		Filename:        resp.Filename,
 		CompiledContent: resp.CompiledContent,
-	}, nil
+		}
+	}()
+
+// 	log.Printf("Server received compiled file: %s", resp.Filename)
+
+// 	return &pb.BuildResponse{
+// 		Filename:        resp.Filename,
+// 		CompiledContent: resp.CompiledContent,
+// 	}, nil
+// }
+
+	select {
+		case resp := <-respChan:
+		log.Printf("Server received compiled file: %s", resp.Filename)
+		return resp, nil
+		case err := <-errChan:
+		log.Printf("Error while processing file %s: %v", req.Filename, err)
+		return nil, err
+		case <-ctx.Done(): 
+		log.Printf("Request for %s timed out", req.Filename)
+		return nil, ctx.Err()
+}
 }
 
 func main() {
@@ -63,7 +93,7 @@ func main() {
 	var workers []pb.WorkerServiceClient
 
 	for _, addr := range workerAddrList {
-		conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 		if err != nil {
 			log.Fatalf("Could not connect to worker %s: %v", addr, err)
 		}
