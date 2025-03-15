@@ -5,143 +5,125 @@ import (
 	"flag"
 	"log"
 	"net"
-	"os"
-	pb "remote-build/remote-build"
 	"sync"
+	"time"
 
+	pb "remote-build/remote-build"
+
+	"github.com/confluentinc/confluent-kafka-go/kafka"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
-	"gopkg.in/yaml.v3"
 )
 
-// var (
-// 	port       = flag.Int("port", 50051, "The server port")
-// 	workerAddrs = flag.String("worker_addrs", "localhost:50052,localhost:50053,localhost:50054", "separated worker addresses")
-// )
-
-type Config struct {
-	Config struct {
-		NumberOfWorker int      `yaml:"numberofworker"`
-		WorkerIP       []string `yaml:"workerIP"`
-	} `yaml:"Config"`
-}
+var (
+	addr        = flag.String("addr", ":50051", "The server address")
+	kafkaBroker = flag.String("kafka-broker", "localhost:9092", "Kafka broker address")
+)
 
 type Server struct {
 	pb.UnimplementedMicServiceServer
-	workers    []pb.WorkerServiceClient
-	mu         sync.Mutex
-	nextWorker int
+	producer      *kafka.Producer
+	consumer      *kafka.Consumer
+	responseCache map[string]*pb.BuildResponse
+	cacheLock     sync.Mutex
 }
 
-// Selects the next worker (RR)
-func (s *Server) getNextWorker() pb.WorkerServiceClient {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	worker := s.workers[s.nextWorker]
-	s.nextWorker = (s.nextWorker + 1) % len(s.workers)
-	return worker
+func NewServer() (*Server, error) {
+	producer, err := kafka.NewProducer(&kafka.ConfigMap{"bootstrap.servers": *kafkaBroker})
+	if err != nil {
+		return nil, err
+	}
+
+	consumer, err := kafka.NewConsumer(&kafka.ConfigMap{
+		"bootstrap.servers": *kafkaBroker,
+		"group.id":          "server-group",
+		"auto.offset.reset": "earliest",
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	err = consumer.Subscribe("build_responses", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	server := &Server{
+		producer:      producer,
+		consumer:      consumer,
+		responseCache: make(map[string]*pb.BuildResponse),
+	}
+
+	go server.consumeBuildResponses()
+	return server, nil
 }
 
 func (s *Server) StartBuild(ctx context.Context, req *pb.BuildRequest) (*pb.BuildResponse, error) {
-	log.Printf("Server received file: %s", req.Filename)
+	log.Printf("Received build request for file: %s", req.Filename)
 
-	worker := s.getNextWorker()
+	err := s.producer.Produce(&kafka.Message{
+		TopicPartition: kafka.TopicPartition{Topic: &[]string{"build_requests"}[0], Partition: kafka.PartitionAny},
+		Key:            []byte(req.Filename),
+		Value:          req.FileContent,
+	}, nil)
 
-	// resp, err := worker.ProcessWork(ctx, &pb.WorkRequest{
-	// 	Filename:    req.Filename,
-	// 	FileContent: req.FileContent,
-	// })
+	s.producer.Flush(1000)
 
-	respChan := make(chan *pb.BuildResponse)
-	errChan := make(chan error)
-
-	go func() {
-		resp, err := worker.ProcessWork(ctx, &pb.WorkRequest{
-			Filename:    req.Filename,
-			FileContent: req.FileContent,
-		})
-
-		if err != nil {
-			errChan <- err
-			return
-		}
-		respChan <- &pb.BuildResponse{
-			Filename:        resp.Filename,
-			CompiledContent: resp.CompiledContent,
-		}
-	}()
-
-	// 	log.Printf("Server received compiled file: %s", resp.Filename)
-
-	// 	return &pb.BuildResponse{
-	// 		Filename:        resp.Filename,
-	// 		CompiledContent: resp.CompiledContent,
-	// 	}, nil
-	// }
-
-	select {
-	case resp := <-respChan:
-		log.Printf("Server received compiled file: %s", resp.Filename)
-		return resp, nil
-	case err := <-errChan:
-		log.Printf("Error while processing file %s: %v", req.Filename, err)
+	if err != nil {
+		log.Printf("Failed to send message to Kafka: %v", err)
 		return nil, err
-	case <-ctx.Done():
-		log.Printf("Request for %s timed out", req.Filename)
-		return nil, ctx.Err()
 	}
+
+	// Wait for the worker response 
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		s.cacheLock.Lock()
+		resp, exists := s.responseCache[req.Filename]
+		if exists {
+			delete(s.responseCache, req.Filename)
+			s.cacheLock.Unlock()
+			log.Printf("Sending compiled file: %s", resp.Filename)
+			return resp, nil
+		}
+		s.cacheLock.Unlock()
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	log.Printf("Timeout: No response for %s", req.Filename)
+	return nil, context.DeadlineExceeded
 }
 
-func LoadConfig(filename string) (*Config, error) {
-	data, err := os.ReadFile(filename)
-	if err != nil {
-		return nil, err
-	}
+func (s *Server) consumeBuildResponses() {
+	log.Println("Server listening for compiled files...")
 
-	var config Config
-	err = yaml.Unmarshal(data, &config)
-	if err != nil {
-		return nil, err
-	}
+	for {
+		msg, err := s.consumer.ReadMessage(-1)
+		if err != nil {
+			log.Printf("Consumer error: %v", err)
+			continue
+		}
 
-	return &config, nil
+		filename := string(msg.Key)
+		log.Printf("Received compiled file from worker: %s", filename)
+
+		s.cacheLock.Lock()
+		s.responseCache[filename] = &pb.BuildResponse{
+			Filename:        filename,
+			CompiledContent: msg.Value,
+		}
+		log.Printf("Stored compiled file in cache: %s", filename)
+		s.cacheLock.Unlock()
+	}
 }
 
 func main() {
 	flag.Parse()
 
-	// workerAddrList := strings.Split(*workerAddrs, ",")
-	// var workers []pb.WorkerServiceClient
-	config, err := LoadConfig("server/config.yaml")
+	server, err := NewServer()
 	if err != nil {
-		log.Fatalf(" Failed to load config: %v", err)
+		log.Fatalf("Failed to create Kafka producer: %v", err)
 	}
-	log.Printf(" Loaded Config: %+v", config)
-	var workers []pb.WorkerServiceClient
-
-	// for _, addr := range config.Config.WorkerIP {
-	// 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	// 	if err != nil {
-	// 		log.Fatalf("Could not connect to worker %s: %v", addr, err)
-	// 	}
-	// 	workers = append(workers, pb.NewWorkerServiceClient(conn))
-	// 	log.Printf("Connected to worker at %s", addr)
-	// }
-
-	for _, addr := range config.Config.WorkerIP {
-		log.Printf("Attempting to connect to worker at %s...", addr)
-		conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-		if err != nil {
-			log.Printf(" Could not connect to worker %s: %v", addr, err)
-			continue 
-		}
-		workers = append(workers, pb.NewWorkerServiceClient(conn))
-		log.Printf(" Successfully connected to worker at %s", addr)
-	}
-
-	if len(workers) == 0 {
-		log.Fatalf("No workers connected!")
-	}
+	defer server.producer.Close()
+	defer server.consumer.Close()
 
 	lis, err := net.Listen("tcp", ":50051")
 	if err != nil {
@@ -149,11 +131,10 @@ func main() {
 	}
 
 	grpcServer := grpc.NewServer()
-	server := &Server{workers: workers}
-
 	pb.RegisterMicServiceServer(grpcServer, server)
 
-	log.Printf("Server is running on port 50051, distributing tasks to workers: %v", config.Config.WorkerIP)
+	log.Println("Server is running on port 50051...")
+
 	if err := grpcServer.Serve(lis); err != nil {
 		log.Fatalf("Failed to serve: %v", err)
 	}

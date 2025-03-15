@@ -3,13 +3,15 @@ package main
 import (
 	"context"
 	"flag"
-	"os"
 	"log"
+	"os"
+	"strings"
 	"time"
+
+	pb "remote-build/remote-build"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	pb "remote-build/remote-build"
 )
 
 var addr = flag.String("addr", "localhost:50051", "The server address")
@@ -30,26 +32,29 @@ func main() {
 	for _, filename := range files {
 		fileData, err := os.ReadFile(filename)
 		if err != nil {
-			log.Fatalf("Failed to read file %s: %v", filename, err)
+			log.Printf("Skipping file %s: %v", filename, err)
+			continue
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
+		// Send build request
 		resp, err := client.StartBuild(ctx, &pb.BuildRequest{
 			Filename:    filename,
 			FileContent: fileData,
 		})
 		if err != nil {
-			log.Fatalf("Error while starting build for %s: %v", filename, err)
+			log.Printf("Error while starting build for %s: %v", filename, err)
+			continue
 		}
 
-		outputFilename := resp.Filename
-		err = os.WriteFile(outputFilename, resp.CompiledContent, 0644)
+		outputFile := strings.TrimSuffix(resp.Filename, ".c") + ".o"
+		err = os.WriteFile(outputFile, resp.CompiledContent, 0755)
 		if err != nil {
-			log.Fatalf("Failed to save compiled file %s: %v", outputFilename, err)
+			log.Printf("Failed to save compiled file: %v", err)
+		} else {
+			log.Printf("Build Completed: %s saved as %s", filename, outputFile)
 		}
-
-		log.Printf("Build Completed: %s saved as %s", filename, outputFilename)
 	}
 }

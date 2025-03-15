@@ -1,71 +1,122 @@
 package main
 
 import (
-	"context"
-	"flag"
-	"fmt"
-	"os"
+	"bytes"
 	"log"
-	"net"
+	"os"
 	"os/exec"
 	"strings"
+	"time"
 
-	"google.golang.org/grpc"
-	pb "remote-build/remote-build"
+	"github.com/confluentinc/confluent-kafka-go/kafka"
 )
 
-var port = flag.Int("port", 50052, "The worker port") 
-
-type WorkerServer struct {
-	pb.UnimplementedWorkerServiceServer
-}
-
-func (w *WorkerServer) ProcessWork(ctx context.Context, req *pb.WorkRequest) (*pb.WorkResponse, error) {
-	log.Printf("Worker on port %d received file: %s", *port, req.Filename)
-
-	// Save the `.c` file
-	err := os.WriteFile(req.Filename, req.FileContent, 0644)
-	if err != nil {
-		log.Fatalf("Failed to write file: %v", err)
-	}
-
-	// Convert `.c` to `.o`
-	compiledFilename := strings.Replace(req.Filename, ".c", ".o", 1)
-	log.Printf("Compiling %s to %s", req.Filename, compiledFilename)
-
-	// Compile using `gcc`
-	cmd := exec.Command("gcc", "-c", req.Filename, "-o", compiledFilename)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Fatalf("Compilation failed: %v, Output: %s", err, output)
-	}
-
-	compiledContent, err := os.ReadFile(compiledFilename)
-	if err != nil {
-		log.Fatalf("Failed to read compiled file: %v", err)
-	}
-	os.Remove(compiledFilename)
-
-	log.Printf("Compilation successful: %s", compiledFilename)
-	return &pb.WorkResponse{
-		Filename:        compiledFilename,
-		CompiledContent: compiledContent,
-	}, nil
-}
+var kafkaBroker = "localhost:9092"
 
 func main() {
-	flag.Parse()
-
-	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
+	
+	consumer, err := kafka.NewConsumer(&kafka.ConfigMap{
+		"bootstrap.servers": kafkaBroker,
+		"group.id":          "worker-group",
+		"auto.offset.reset": "earliest",
+		"fetch.wait.max.ms": "10",   
+		"fetch.min.bytes": "1",      
+		"enable.auto.commit": "false", 
+	})
 	if err != nil {
-		log.Fatalf("Failed to listen on port %d: %v", *port, err)
+		log.Fatalf("Failed to create consumer: %v", err)
+	}
+	defer consumer.Close()
+
+	// Subscribe the topic
+	err = consumer.SubscribeTopics([]string{"build_requests"}, nil)
+	if err != nil {
+		log.Fatalf("Failed to subscribe to topic: %v", err)
 	}
 
-	grpcServer := grpc.NewServer()
-	pb.RegisterWorkerServiceServer(grpcServer, &WorkerServer{})
+	// Initialize Kafka Producer
+	producer, err := kafka.NewProducer(&kafka.ConfigMap{"bootstrap.servers": kafkaBroker})
+	if err != nil {
+		log.Fatalf("Failed to create producer: %v", err)
+	}
+	defer producer.Close()
 
-	log.Printf("Worker is running on port %d...", *port)
-	if err := grpcServer.Serve(lis); err != nil {
-		log.Fatalf("Failed to serve: %v", err)
+	log.Println("Worker is listening for tasks...")
+
+	for {
+		msg, err := consumer.ReadMessage(-1)
+		if err != nil {
+			log.Printf("Kafka read error: %v", err)
+			continue
+		}
+
+		filename := string(msg.Key)
+
+		startTime := time.Now()
+
+		objectFile, compiledContent, err := processFileFromKafka(filename, msg.Value)
+		elapsedTime := time.Since(startTime)
+
+		if err != nil {
+			log.Printf("Compilation failed for %s (took %v): %v", filename, elapsedTime, err)
+			continue
+		}
+
+		log.Printf("Compiled %s successfully in %v", filename, elapsedTime)
+
+		// Send compiled .o file to build_responses
+		deliveryChan := make(chan kafka.Event) 
+		err = producer.Produce(&kafka.Message{
+			TopicPartition: kafka.TopicPartition{Topic: &[]string{"build_responses"}[0], Partition: kafka.PartitionAny},
+			Key:            []byte(objectFile),
+			Value:          compiledContent,
+		}, deliveryChan)
+			
+		if err != nil {
+			log.Printf("Failed to produce Kafka message for %s: %v", objectFile, err)
+			continue 
+		}
+
+		e := <-deliveryChan
+		m := e.(*kafka.Message)
+		if m.TopicPartition.Error != nil {
+			log.Printf("Failed to deliver message for %s: %v", objectFile, m.TopicPartition.Error)
+			continue 
+		}
+
+		_, err = consumer.CommitMessage(msg)
+		if err != nil {
+			log.Printf("Failed to commit Kafka message offset for %s: %v", filename, err)
+		} else {
+			log.Printf("Committed Kafka message offset for %s", filename)
+		}
 	}
 }
+
+func processFileFromKafka(filename string, sourceCode []byte) (string, []byte, error) {
+	log.Printf("Compiling file: %s (directly from Kafka)", filename)
+
+	objectFile := strings.TrimSuffix(filename, ".c") + ".o"
+
+	// Run GCC
+	cmd := exec.Command("gcc", "-x", "c", "-c", "-", "-o", objectFile) 
+	cmd.Stdin = bytes.NewReader(sourceCode)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("GCC Compilation Failed: %s", string(output))
+		return "", nil, err
+	}
+
+	log.Printf("Compiled %s successfully", filename)
+
+	// read compiled .o file content
+	compiledContent, err := os.ReadFile(objectFile)
+	if err != nil {
+		log.Printf("Failed to read compiled file: %s", objectFile)
+		return "", nil, err
+	}
+
+	return objectFile, compiledContent, nil
+}
+
