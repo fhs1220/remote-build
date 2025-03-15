@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"flag"
 	"log"
 	"net"
@@ -11,20 +13,22 @@ import (
 	pb "remote-build/remote-build"
 
 	"github.com/confluentinc/confluent-kafka-go/kafka"
+	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 )
 
 var (
 	addr        = flag.String("addr", ":50051", "The server address")
 	kafkaBroker = flag.String("kafka-broker", "localhost:9092", "Kafka broker address")
+	redisAddr   = flag.String("redis-addr", "localhost:6379", "Redis address")
 )
 
 type Server struct {
 	pb.UnimplementedMicServiceServer
-	producer      *kafka.Producer
-	consumer      *kafka.Consumer
-	responseCache map[string]*pb.BuildResponse
-	cacheLock     sync.Mutex
+	producer  *kafka.Producer
+	consumer  *kafka.Consumer
+	redis     *redis.Client
+	cacheLock sync.Mutex
 }
 
 func NewServer() (*Server, error) {
@@ -47,20 +51,44 @@ func NewServer() (*Server, error) {
 		return nil, err
 	}
 
+	redisClient := redis.NewClient(&redis.Options{
+		Addr: *redisAddr,
+		DB:   0,
+	})
+
 	server := &Server{
-		producer:      producer,
-		consumer:      consumer,
-		responseCache: make(map[string]*pb.BuildResponse),
+		producer: producer,
+		consumer: consumer,
+		redis:    redisClient,
 	}
 
 	go server.consumeBuildResponses()
 	return server, nil
 }
 
+// Compute a hash for a file's content (CAS - Content Addressable Storage)
+func computeHash(content []byte) string {
+	hasher := sha256.New()
+	hasher.Write(content)
+	return hex.EncodeToString(hasher.Sum(nil))
+}
+
 func (s *Server) StartBuild(ctx context.Context, req *pb.BuildRequest) (*pb.BuildResponse, error) {
 	log.Printf("Received build request for file: %s", req.Filename)
 
-	err := s.producer.Produce(&kafka.Message{
+	// Compute a unique hash-based key
+	buildHash := computeHash(req.FileContent)
+	cacheKey := "cache:" + buildHash
+
+	// Check if compiled `.o` file is already in Redis
+	cachedContent, err := s.redis.Get(ctx, cacheKey).Bytes()
+	if err == nil {
+		log.Printf("Cache hit: Returning compiled file from Redis for %s (hash: %s)", req.Filename, buildHash)
+		return &pb.BuildResponse{Filename: req.Filename, CompiledContent: cachedContent}, nil
+	}
+
+	// Publish build request to Kafka
+	err = s.producer.Produce(&kafka.Message{
 		TopicPartition: kafka.TopicPartition{Topic: &[]string{"build_requests"}[0], Partition: kafka.PartitionAny},
 		Key:            []byte(req.Filename),
 		Value:          req.FileContent,
@@ -69,26 +97,22 @@ func (s *Server) StartBuild(ctx context.Context, req *pb.BuildRequest) (*pb.Buil
 	s.producer.Flush(1000)
 
 	if err != nil {
-		log.Printf("Failed to send message to Kafka: %v", err)
+		log.Printf("Failed to send build request to Kafka: %v", err)
 		return nil, err
 	}
 
-	// Wait for the worker response 
+	// Wait for compiled `.o` file to be stored in Redis
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
-		s.cacheLock.Lock()
-		resp, exists := s.responseCache[req.Filename]
-		if exists {
-			delete(s.responseCache, req.Filename)
-			s.cacheLock.Unlock()
-			log.Printf("Sending compiled file: %s", resp.Filename)
-			return resp, nil
+		cachedContent, err := s.redis.Get(ctx, cacheKey).Bytes()
+		if err == nil {
+			log.Printf("Build result found in Redis for %s (hash: %s)", req.Filename, buildHash)
+			return &pb.BuildResponse{Filename: req.Filename, CompiledContent: cachedContent}, nil
 		}
-		s.cacheLock.Unlock()
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	log.Printf("Timeout: No response for %s", req.Filename)
+	log.Printf("Timeout: No response received for %s", req.Filename)
 	return nil, context.DeadlineExceeded
 }
 
@@ -101,17 +125,10 @@ func (s *Server) consumeBuildResponses() {
 			log.Printf("Consumer error: %v", err)
 			continue
 		}
-
 		filename := string(msg.Key)
-		log.Printf("Received compiled file from worker: %s", filename)
+		buildHash := computeHash(msg.Value)
+		log.Printf("Received compiled file from worker: %s (hash: %s)", filename, buildHash)
 
-		s.cacheLock.Lock()
-		s.responseCache[filename] = &pb.BuildResponse{
-			Filename:        filename,
-			CompiledContent: msg.Value,
-		}
-		log.Printf("Stored compiled file in cache: %s", filename)
-		s.cacheLock.Unlock()
 	}
 }
 
@@ -120,10 +137,11 @@ func main() {
 
 	server, err := NewServer()
 	if err != nil {
-		log.Fatalf("Failed to create Kafka producer: %v", err)
+		log.Fatalf("Failed to create server: %v", err)
 	}
 	defer server.producer.Close()
 	defer server.consumer.Close()
+	defer server.redis.Close()
 
 	lis, err := net.Listen("tcp", ":50051")
 	if err != nil {
